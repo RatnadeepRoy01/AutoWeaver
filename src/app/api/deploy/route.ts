@@ -49,17 +49,20 @@ export async function POST(req: NextRequest) {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${NETLIFY_TOKEN}`,
+        'Content-Type': 'application/zip',
       },
       body: zipBlob,
     });
     if (!deployRes.ok) {
       const err = await deployRes.text();
+      console.error('Failed to deploy to Netlify:', err); // Added logging
       return NextResponse.json({ success: false, error: 'Failed to deploy to Netlify: ' + err }, { status: 500 });
     }
     const deploy = await deployRes.json();
     const url = deploy.deploy_ssl_url || deploy.ssl_url || deploy.url;
     return NextResponse.json({ success: true, url });
   } catch (error) {
+    console.error('Deployment error:', error); // Added logging
     return NextResponse.json({ success: false, error: 'Deployment error: ' + ((error as any)?.message || String(error)) }, { status: 500 });
   }
 } 
