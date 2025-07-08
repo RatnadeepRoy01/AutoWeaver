@@ -1,103 +1,261 @@
-import Image from "next/image";
+"use client";
+import { useState, useRef, useEffect } from "react";
+import { Download, Code, Globe, Sparkles, FileText, Folder, ChevronRight, RefreshCw } from "lucide-react";
+import { GeneratedData, TabType } from "./utils/types";
+import { createPreviewUrl, downloadProject } from "./utils/helpers";
+import { PromptInput } from "./components/PromptInput";
+import { Header } from "./components/Header";
+import { ProjectInfo } from "./components/ProjectInfo";
+import { Tabs } from "./components/Tabs";
+import { Preview } from "./components/Preview";
+import { SourceCodeViewer } from "./components/SourceCodeViewer";
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [prompt, setPrompt] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
+  const [generatedData, setGeneratedData] = useState<GeneratedData | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType>("preview");
+  const [activeFile, setActiveFile] = useState<number>(0);
+  const [previewKey, setPreviewKey] = useState<number>(0);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  // --- Add follow-up prompt state ---
+  const [followupPrompt, setFollowupPrompt] = useState<string>("");
+  const [followupLoading, setFollowupLoading] = useState<boolean>(false);
+  const [followupError, setFollowupError] = useState<string>("");
+  // --- Netlify deploy state ---
+  const [deploying, setDeploying] = useState(false);
+  const [deployError, setDeployError] = useState("");
+  const [deployUrl, setDeployUrl] = useState("");
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  const handleGenerate = async (): Promise<void> => {
+    setLoading(true);
+    setError("");
+    setGeneratedData(null);
+    
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        // If 'updated' is present, only update those files, else replace all
+        setGeneratedData(prev => {
+          if (Array.isArray(data.updated)) {
+            // Partial update (shouldn't happen on initial generate, but handle just in case)
+            const updatedData = { ...(prev || {}) };
+            if (data.updated.includes("html") && typeof data.html === "string") {
+              updatedData.html = data.html;
+            }
+            if (data.updated.includes("css") && typeof data.css === "string") {
+              updatedData.css = data.css;
+            }
+            if (data.updated.includes("js") && typeof data.js === "string") {
+              updatedData.js = data.js;
+            }
+            // Also update projectName/description if present
+            if (data.projectName) updatedData.projectName = data.projectName;
+            if (data.description) updatedData.description = data.description;
+            return updatedData;
+          } else {
+            // Full replace
+            return data;
+          }
+        });
+        setActiveTab("preview");
+        setActiveFile(0);
+        setPreviewKey(prev => prev + 1);
+      } else {
+        setError(data.error || "Failed to generate website");
+      }
+    } catch (e) {
+      setError("Network error. Please try again.");
+      console.error("Generation error:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshPreview = () => {
+    setPreviewKey(prev => prev + 1);
+  };
+
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+
+  useEffect(() => {
+    if (generatedData && generatedData.html) {
+      // Clean up previous URL
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      
+      const newUrl = createPreviewUrl(
+        generatedData.html,
+        generatedData.css || "",
+        generatedData.js || ""
+      );
+      setPreviewUrl(newUrl);
+    }
+    
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [generatedData, previewKey]);
+
+  // --- Add follow-up handler ---
+  const handleFollowup = async (): Promise<void> => {
+    if (!generatedData) return;
+    setFollowupLoading(true);
+    setFollowupError("");
+    try {
+      // Send follow-up prompt and current files to backend
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: followupPrompt,
+          files: {
+            html: generatedData.html,
+            css: generatedData.css,
+            js: generatedData.js
+          }
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // If 'updated' is present, only update those files, else replace all
+        setGeneratedData(prev => {
+          if (!prev) return prev;
+          if (Array.isArray(data.updated)) {
+            const updatedData = { ...prev };
+            if (data.updated.includes("html") && typeof data.html === "string") {
+              updatedData.html = data.html;
+            }
+            if (data.updated.includes("css") && typeof data.css === "string") {
+              updatedData.css = data.css;
+            }
+            if (data.updated.includes("js") && typeof data.js === "string") {
+              updatedData.js = data.js;
+            }
+            // Also update projectName/description if present
+            if (data.projectName) updatedData.projectName = data.projectName;
+            if (data.description) updatedData.description = data.description;
+            return updatedData;
+          } else {
+            // Full replace
+            return data;
+          }
+        });
+        setPreviewKey(prev => prev + 1);
+        setFollowupPrompt("");
+      } else {
+        setFollowupError(data.error || "Failed to update website");
+      }
+    } catch (e) {
+      setFollowupError("Network error. Please try again.");
+      console.error("Follow-up error:", e);
+    } finally {
+      setFollowupLoading(false);
+    }
+  };
+
+  const handleDeploy = async () => {
+    if (!generatedData) return;
+    setDeploying(true);
+    setDeployError("");
+    setDeployUrl("");
+    try {
+      const res = await fetch("/api/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: generatedData.html,
+          css: generatedData.css,
+          js: generatedData.js,
+          projectName: generatedData.projectName || "website"
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.url) {
+        setDeployUrl(data.url);
+      } else {
+        setDeployError(data.error || "Failed to deploy to Netlify");
+      }
+    } catch (e) {
+      setDeployError("Network error. Please try again.");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      {/* Header */}
+      <Header />
+
+      {/* Main Content */}
+      <div className="container mx-auto px-4 pb-16">
+        {/* Input Section */}
+        <PromptInput
+          prompt={prompt}
+          setPrompt={setPrompt}
+          loading={loading}
+          handleGenerate={handleGenerate}
+          error={error}
+        />
+
+        {/* Results Section */}
+        {generatedData && (
+          <div className="max-w-7xl mx-auto">
+            {/* Project Info */}
+            <ProjectInfo
+              projectName={generatedData.projectName || "Generated Website"}
+              description={generatedData.description || ""}
+              onRefresh={refreshPreview}
+              onDownload={() => downloadProject(generatedData)}
+              onDeploy={handleDeploy}
+              deploying={deploying}
+              deployError={deployError}
+              deployUrl={deployUrl}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+
+            {/* Tabs */}
+            <Tabs activeTab={activeTab} setActiveTab={setActiveTab} />
+
+            {/* Content */}
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+              {activeTab === "preview" && (
+                <Preview
+                  previewUrl={previewUrl}
+                  previewKey={previewKey}
+                  iframeRef={iframeRef}
+                  generatedData={generatedData}
+                  followupPrompt={followupPrompt}
+                  setFollowupPrompt={setFollowupPrompt}
+                  followupLoading={followupLoading}
+                  handleFollowup={handleFollowup}
+                  followupError={followupError}
+                />
+              )}
+
+              {activeTab === "code" && (
+                <SourceCodeViewer
+                  activeFile={activeFile}
+                  setActiveFile={setActiveFile}
+                  generatedData={generatedData}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

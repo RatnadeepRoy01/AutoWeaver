@@ -1,0 +1,17 @@
+export function createPreviewUrl(html: string, css: string, js: string): string {
+  const completeHtml = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Preview</title>\n    <style>\n        ${css || ""}\n    </style>\n    <script>\n        // Complete isolation - override all navigation methods\n        (function() {\n            const originalOpen = window.open;\n            const originalLocation = window.location;\n            window.open = function() { return null; };\n            Object.defineProperty(window, 'location', {\n                get: function() { return originalLocation; },\n                set: function() { return false; }\n            });\n            const originalPushState = history.pushState;\n            const originalReplaceState = history.replaceState;\n            history.pushState = function() { return false; };\n            history.replaceState = function() { return false; };\n            document.addEventListener('DOMContentLoaded', function() {\n                document.addEventListener('click', function(e) {\n                    const target = e.target.closest('a');\n                    if (target) {\n                        const href = target.getAttribute('href');\n                        if (href && !href.startsWith('#')) {\n                            e.preventDefault();\n                            e.stopPropagation();\n                            e.stopImmediatePropagation();\n                            return false;\n                        }\n                    }\n                }, true);\n                document.addEventListener('submit', function(e) {\n                    const form = e.target;\n                    if (form.tagName === 'FORM') {\n                        const action = form.getAttribute('action');\n                        if (action && action !== '#' && action !== '') {\n                            e.preventDefault();\n                            e.stopPropagation();\n                            e.stopImmediatePropagation();\n                            return false;\n                        }\n                    }\n                }, true);\n            });\n        })();\n    </script>\n</head>\n<body>\n    ${html?.replace(/<\/?(?:html|head|body)[^>]*>/gi, '') || ""}\n    <script>\n        ${js || ""}\n    </script>\n</body>\n</html>`;
+  const blob = new Blob([completeHtml], { type: 'text/html' });
+  return URL.createObjectURL(blob);
+}
+
+export function downloadProject(generatedData: { html?: string; css?: string; js?: string; projectName?: string }) {
+  if (!generatedData || !generatedData.html) return;
+  const completeHtml = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>${generatedData.projectName || "Generated Website"}</title>\n    <style>\n        ${generatedData.css || ""}\n    </style>\n</head>\n<body>\n    ${generatedData.html?.replace(/<\/?(?:html|head|body)[^>]*>/gi, '') || ""}\n    <script>\n        ${generatedData.js || ""}\n    </script>\n</body>\n</html>`;
+  const blob = new Blob([completeHtml], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${generatedData.projectName || "website"}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+} 
